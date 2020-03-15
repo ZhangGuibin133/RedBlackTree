@@ -1,0 +1,207 @@
+class Node<T : Comparable<T>>(
+    val key: T,
+    var value: Any?,
+    var left: Node<T>? = null,
+    var right: Node<T>? = null,
+    var father: Node<T>? = null,
+    var isBlack: Boolean = false
+) : Comparable<Node<T>> {
+
+    inline fun isRed() = !isBlack
+    inline fun uncle() = father?.brother()
+    inline fun grandFather() = father?.father
+    inline fun brother() = father?.run { if (this > this@Node) right else left }
+
+    //离父更近或更远的儿子
+    inline fun nearSon() = father?.run { if (this > this@Node) this@Node.right else this@Node.left }
+    inline fun farSon() = father?.run { if (this < this@Node) this@Node.right else this@Node.left }
+
+    inline fun isRedSetBlack(): Boolean {
+        if (isBlack) return false
+        isBlack = true
+        return true
+    }
+
+    inline fun swapColor(other: Node<T>) {
+        val t = other.isBlack
+        other.isBlack = isBlack
+        isBlack = t
+    }
+
+    inline fun giveTopTo(son: Node<T>) {
+        swapColor(son)//先互换颜色
+        //移交父级关系
+        son.father = father?.also { if (it > son) it.left = son else it.right = son }
+        father = son
+        //处理及相互关系,如在右,收其右子为左子,成其右子,否则收其左子为右子,成其左子
+        if (this > son) {
+            left = son.right?.also { it.father = this }
+            son.right = this
+        } else {
+            right = son.left?.also { it.father = this }
+            son.left = this
+        }
+    }
+
+    //找一个在右边投影最近的节点,用于删除,返回节点可能右子,如返回自身,节点可能有左子
+    inline fun findRightDescender(): Node<T> {
+        var now = right ?: return this
+        while (true) {
+            now = now.left ?: return now
+        }
+    }
+
+    //插入时,找到最接近节点,或键相同节点
+    inline fun findFather(node: Node<T>): Node<T> {
+        var now = this
+        while (true) {
+            now = when {
+                now < node -> now.right ?: return now
+                now > node -> now.left ?: return now
+                else -> return now
+            }
+        }
+    }
+
+    //按键查找节点 无则返回null
+    inline fun findNodeByKey(searchKey: T): Node<T>? {
+        var now = this
+        while (true) {
+            now = when {
+                now.key < searchKey -> now.right ?: return null
+                now.key > searchKey -> now.left ?: return null
+                else -> return now
+            }
+        }
+    }
+
+    //将节点添加为子
+    fun toBeFather(son: Node<T>) {
+        if (this > son) left = son else right = son
+        son.father = this
+    }
+
+    override fun equals(other: Any?) = (other as Node<T>?)?.key == key
+    override fun compareTo(other: Node<T>) = key.compareTo(other.key)
+
+    override fun toString(): String {
+        return "[key:$key color:${if (isBlack) "black" else "Red"} father:${father?.key ?: ""} left:${left?.key ?: ""} right:${right?.key ?: ""}"
+    }
+
+    fun print(path: String = "", redCount: Int = 0, blackCount: Int = 0) {
+        var red = redCount
+        var black = blackCount
+        if (isBlack) black++ else red++
+        val newPath =
+            "$path [$key|${if (isBlack) "B" else "R"}|${father?.key ?: ""}|${left?.key ?: ""}|${right?.key ?: ""}]"
+        if (left == null || right == null) {
+            println("$black $red $newPath")
+        }
+        left?.print(newPath, red, black)
+        right?.print(newPath, red, black)
+    }
+}
+
+class RedBlackTree<T : Comparable<T>>(var root: Node<T>? = null) {
+    //如插入相同的Key,则将其替换
+    fun Node<T>.insert() {
+        when (val fatherNode = root?.findFather(this)) {
+            null -> root = this
+            this -> let { fatherNode.value = this.value; return }
+            else -> fatherNode.toBeFather(this)
+        }
+        redBalance()
+    }
+
+    //按键值删除,如查不到键,返回false
+    fun deleteByKey(deleteKey: T): Boolean {
+        val deleteNode = root?.findNodeByKey(deleteKey) ?: return false
+        //左右子都可能有,如有则必为红,将其进位,保证黑不变性
+        deleteNode.findRightDescender().apply {
+            if (right != null) setTopTo(this, right!!)
+            if (left != null) setTopTo(this, left!!)
+            if (isBlack) blackBalance()
+            quitFromTree()
+            //如果不是删除节点,需要将删除节点替换,保留删除节点颜色
+            if (this != deleteNode) replaceOther(deleteNode)
+        }
+        return true
+    }
+
+    //替换三条线,如为根则设为根
+    private fun Node<T>.replaceOther(other: Node<T>) {
+        isBlack = other.isBlack
+        other.father?.toBeFather(this) ?: run { father = null;root = this }
+        if (other.left != null) toBeFather(other.left!!)
+        if (other.right != null) toBeFather(other.right!!)
+    }
+
+    //oldTop为原顶点 nowFather nowSon都有可能成为新顶点
+    private fun setTopTo(oldTop: Node<T>, nowFather: Node<T>, nowSon: Node<T>? = null) {
+        when (nowSon) {
+            null -> oldTop.giveTopTo(nowFather)
+            nowFather.nearSon() -> {
+                nowFather.giveTopTo(nowSon)
+                oldTop.giveTopTo(nowSon)
+            }
+            else -> oldTop.giveTopTo(nowFather)
+        }
+        if (oldTop == root) root = oldTop.father
+    }
+
+    //只有红色节点才进行检查
+    private fun Node<T>.redBalance() {
+        when {
+            //递归出口:如father为Null,则设当前节点为根,并变为黑色,黑高增加一层
+            father == null -> run { isBlack = true; root = this }
+            //递归出口:如父节点为黑色,不影响平衡,无需处理
+            father!!.isBlack -> return
+            //uncle与父同为红色,同改黑色,将祖父改红色由祖父向上递归处理
+            uncle()?.isRedSetBlack() == true -> {
+                father!!.isBlack = true
+                grandFather()!!.isBlack = false
+                grandFather()!!.redBalance()
+            }
+            //递归出口 Uncle为黑色,通过红子进位,可在保证黑不变时消除连续红色
+            else -> setTopTo(grandFather()!!, father!!, this)
+        }
+    }
+
+    //需要本通道减少一个黑色 另一边黑色不变
+    private fun Node<T>.blackBalance() {
+        when {
+            //递归出口,为根节点,黑色减少了一层
+            father == null -> return
+            //递归出口,如远离父节点的侄为红,兄弟黑子进位,将其子变黑即可
+            brother()!!.farSon()?.isRedSetBlack() == true -> setTopTo(father!!, brother()!!)
+            //递归出口:如果兄弟靠近父亲的子节点为红色,需要其先代兄弟再代父,由函数根据位置关系处理
+            brother()!!.nearSon()?.isRedSetBlack() == true
+            -> setTopTo(father!!, brother()!!, brother()!!.nearSon()!!)
+            //递归出口:父节点为红,此时由于两个侄儿全黑或无,可将兄弟置为红色,父节点改为黑色,
+            father!!.isRedSetBlack() -> brother()!!.isBlack = false
+            //兄弟为红,将其与父交换顶点,变黑色,父为红色,再行递归处理,后续相当于处理兄弟的子树,总有出口
+            brother()?.isRed() == true -> run { setTopTo(father!!, brother()!!); blackBalance() }
+            //全黑,无法内部处理,将兄弟变红,本通道整体减少一个黑色,任务交给上级
+            else -> run { brother()!!.isBlack = false; father!!.blackBalance() }
+        }
+    }
+
+    //从树中退出
+    private fun Node<T>.quitFromTree() {
+        when {
+            father == null -> root = null
+            this < father!! -> father!!.left = null
+            else -> father!!.right = null
+        }
+    }
+}
+
+fun main() {
+    RedBlackTree<Int>().apply {
+        repeat(10000) { Node((1 until 81999).random(), it).insert() }
+        root?.print()
+        (100 until 81999).forEach { deleteByKey(it) }
+        println("--------------------------------------------")
+        root?.print()
+    }
+}
